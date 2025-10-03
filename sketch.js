@@ -48,6 +48,7 @@ let zoomInButton, zoomOutButton;
 let increaseRenderDistanceButton, decreaseRenderDistanceButton;
 let recreateWorldButton;
 let renderModeBiomeButton, renderModeHeightButton, renderModeBiomeHeightButton, renderModeTempButton, renderModeRainButton;
+let navForwardButton, navBackButton, navLeftButton, navRightButton; // bottom-right navigation buttons
 
 // ===== Helpers =====
 function drawSquare(x, y, s) { rect(x, y, s, s); }
@@ -212,6 +213,20 @@ function setup(){
   renderModeBiomeHeightButton = new Button(createVector(10, height - 280), 20, 'Show Biome + Height', { onClick: () => { displayMode = 'Biome + Height'; } });
   renderModeTempButton = new Button(createVector(10, height - 310), 20, 'Show Temperature', { onClick: () => { displayMode = 'Temperature'; } });
   renderModeRainButton = new Button(createVector(10, height - 340), 20, 'Show Rainfall', { onClick: () => { displayMode = 'Rainfall'; } });
+
+  // Bottom-right navigation buttons (D-pad)
+  const navSize = 50;
+  const navSpacing = 15;
+  // Place cluster with enough right margin for label rendering area
+  const clusterX = width - 200; // tuned so label area won't overflow
+  const clusterY = height - 200;
+  // Up
+  navForwardButton = new Button(createVector(clusterX + navSize + navSpacing, clusterY), navSize, '', { onClick: () => moveCam(0, -5) });
+  // Left, Right
+  navLeftButton   = new Button(createVector(clusterX, clusterY + navSize + navSpacing), navSize, '', { onClick: () => moveCam(-5, 0) });
+  navRightButton  = new Button(createVector(clusterX + (navSize + navSpacing) * 2, clusterY + navSize + navSpacing), navSize, '', { onClick: () => moveCam(5, 0) });
+  // Down
+  navBackButton   = new Button(createVector(clusterX + navSize + navSpacing, clusterY + (navSize + navSpacing) * 2), navSize, '', { onClick: () => moveCam(0, 5) });
 }
 
 function draw(){
