@@ -14,7 +14,7 @@ const SEA_LEVEL = 150;
 const CHUNK_HEIGHT_MAX = 300;
 
 const DEFAULT_CAM_ZOOM = 0.3;
-const DEFAULT_RENDER_DISTANCE = 20;
+const DEFAULT_RENDER_DISTANCE = 10; // lower default for web perf
 
 // ===== Globals =====
 let camX = 0;
@@ -179,13 +179,20 @@ class Chunk {
     this.x = 0; this.z = 0;
     this.blocks = new Array(CHUNK_SIZE);
     for(let i=0; i<CHUNK_SIZE; i++){ this.blocks[i] = new Array(CHUNK_SIZE); }
+    // Offscreen render target for this chunk (p5.Graphics) and dirty flag
+    this.gfx = null;
+    this.dirty = true;
+    this.lastRenderedMode = null;
   }
 }
 
 // ===== Setup & Draw =====
 function setup(){
   createCanvas(1000, 1000);
-  frameRate(144);
+  // Reduce device pixel ratio to 1 for faster drawing on high-DPI displays
+  pixelDensity(1);
+  // 60 FPS is smoother and less CPU intensive on web
+  frameRate(60);
 
   generatedChunks = [];
   visibleChunks = [];
@@ -225,6 +232,10 @@ function generateChunk(chunkX, chunkZ){
   const newChunk = new Chunk();
   newChunk.x = chunkX;
   newChunk.z = chunkZ;
+  // Create offscreen graphics for this chunk (one pixel per block)
+  newChunk.gfx = createGraphics(CHUNK_SIZE, CHUNK_SIZE);
+  newChunk.gfx.pixelDensity(1);
+  newChunk.gfx.noStroke();
 
   const chunkWorldX = chunkX * CHUNK_SIZE;
   const chunkWorldZ = chunkZ * CHUNK_SIZE;
@@ -460,6 +471,8 @@ function generateChunk(chunkX, chunkZ){
   }
 
   generatedChunks.push(newChunk);
+  // Mark for initial render to gfx on first draw
+  newChunk.dirty = true;
   return newChunk;
 }
 
@@ -605,70 +618,55 @@ function getVisibleChunksO(){
 }
 
 function renderVisibleChunks(){
-  // Render blocks
-  strokeCap(PROJECT);
-  strokeWeight(1);
-
+  // Render chunk images
+  noStroke();
   for(const visibleChunk of visibleChunks){
     const chunkX = visibleChunk.x;
     const chunkZ = visibleChunk.z;
     const chunkWorldX = chunkX * CHUNK_SIZE;
     const chunkWorldZ = chunkZ * CHUNK_SIZE;
 
-    const squareSize = visibleSize * camZoom * 1.1;
+    // Re-render to offscreen image if needed (mode change or first time)
+    if(visibleChunk.dirty || visibleChunk.lastRenderedMode !== displayMode){
+      renderChunkToImage(visibleChunk);
+      visibleChunk.dirty = false;
+      visibleChunk.lastRenderedMode = displayMode;
+    }
 
-    for(let zi=0; zi<CHUNK_SIZE; zi++){
-      for(let xi=0; xi<CHUNK_SIZE; xi++){
-        const block = visibleChunk.blocks[xi][zi];
+    // Where to draw the chunk image on screen
+    const squareX = ((chunkWorldX - camX) * visibleSize) * camZoom;
+    const squareZ = ((chunkWorldZ - camZ) * visibleSize) * camZoom;
+    const sSize = (CHUNK_SIZE * visibleSize) * camZoom * 1.1;
 
-        const biomeCol = block.biome ? block.biome.getColor() : color(0);
+    const drawX = width/2 + squareX;
+    const drawY = width/2 + squareZ; // keep consistent with original
 
-        let r = 0, g = 0, b = 0;
-        if(displayMode === 'Biome'){
-          if(block.biome){
-            r = red(biomeCol);
-            g = green(biomeCol);
-            b = blue(biomeCol);
-          }
-        }
-        else if(displayMode === 'Temperature'){
-          r = map(block.temp, 0, 1, 0, 255);
-          g = map(block.temp, 0, 1, 0, 100);
-          b = map(block.temp, 0, 1, 255, 0);
-        }
-        else if(displayMode === 'Rainfall'){
-          r = 255 * (1 - block.rainfall);
-          g = 255 * (1 - block.rainfall);
-          b = (255 * (1 - block.rainfall)) + (255 * block.rainfall);
-        }
-        else if(displayMode === 'Height'){
-          r = map(block.y, CHUNK_HEIGHT_MIN, CHUNK_HEIGHT_MAX, 0, 255);
-          g = map(block.y, CHUNK_HEIGHT_MIN, CHUNK_HEIGHT_MAX, 0, 255);
-          b = map(block.y, CHUNK_HEIGHT_MIN, CHUNK_HEIGHT_MAX, 0, 255);
-        }
-        else if(displayMode === 'Biome + Height'){
-          r = map(block.y, CHUNK_HEIGHT_MIN, CHUNK_HEIGHT_MAX, 0, red(biomeCol));
-          g = map(block.y, CHUNK_HEIGHT_MIN, CHUNK_HEIGHT_MAX, 0, green(biomeCol));
-          b = map(block.y, CHUNK_HEIGHT_MIN, CHUNK_HEIGHT_MAX, 0, blue(biomeCol));
-        }
-        const colVal = color(r, g, b);
+    // Quick culling if completely off-screen
+    if(drawX + sSize < 0 || drawY + sSize < 0 || drawX > width || drawY > height){
+      continue;
+    }
 
-        const squareX = ((chunkWorldX + xi - camX) * visibleSize) * camZoom;
-        const squareZ = ((chunkWorldZ + zi - camZ) * visibleSize) * camZoom;
+    image(visibleChunk.gfx, drawX, drawY, sSize, sSize);
+  }
 
-        if(squareSize > 1){
-          if(block === mouseOverBlock){
-            fill(color(r * 1.5, g * 1.5, b * 1.5));
-          } else {
-            fill(colVal);
-          }
-          drawSquare(width/2 + squareX, width/2 + squareZ, squareSize);
-        }
-        else{
-          stroke(colVal);
-          point(width/2 + squareX, width/2 + squareZ);
-        }
-      }
+  // Highlight hovered block with a simple overlay (lighten color)
+  if(mouseOverBlock){
+    const bx = mouseOverBlock.x;
+    const bz = mouseOverBlock.z;
+    const rsz = visibleSize * camZoom * 1.1;
+    const sx = ((bx - camX) * visibleSize) * camZoom;
+    const sz = ((bz - camZ) * visibleSize) * camZoom;
+    const drawX = width/2 + sx;
+    const drawY = width/2 + sz;
+    const rgb = computeBlockRGB(mouseOverBlock);
+    fill(Math.min(255, rgb[0] * 1.5), Math.min(255, rgb[1] * 1.5), Math.min(255, rgb[2] * 1.5), 220);
+    noStroke();
+    if(rsz > 1){
+      drawSquare(drawX, drawY, rsz);
+    } else {
+      // If very zoomed out, draw a point
+      stroke(255);
+      point(drawX, drawY);
     }
   }
 
@@ -703,6 +701,62 @@ function renderVisibleChunks(){
       }
     }
   }
+}
+
+// Compute RGB for a block given current displayMode
+function computeBlockRGB(block){
+  let r = 0, g = 0, b = 0;
+  if(displayMode === 'Biome'){
+    if(block.biome){
+      r = block.biome.r;
+      g = block.biome.g;
+      b = block.biome.b;
+    }
+  }
+  else if(displayMode === 'Temperature'){
+    r = map(block.temp, 0, 1, 0, 255);
+    g = map(block.temp, 0, 1, 0, 100);
+    b = map(block.temp, 0, 1, 255, 0);
+  }
+  else if(displayMode === 'Rainfall'){
+    r = 255 * (1 - block.rainfall);
+    g = 255 * (1 - block.rainfall);
+    b = (255 * (1 - block.rainfall)) + (255 * block.rainfall);
+  }
+  else if(displayMode === 'Height'){
+    const v = map(block.y, CHUNK_HEIGHT_MIN, CHUNK_HEIGHT_MAX, 0, 255);
+    r = v; g = v; b = v;
+  }
+  else if(displayMode === 'Biome + Height'){
+    const br = block.biome ? block.biome.r : 0;
+    const bg = block.biome ? block.biome.g : 0;
+    const bb = block.biome ? block.biome.b : 0;
+    r = map(block.y, CHUNK_HEIGHT_MIN, CHUNK_HEIGHT_MAX, 0, br);
+    g = map(block.y, CHUNK_HEIGHT_MIN, CHUNK_HEIGHT_MAX, 0, bg);
+    b = map(block.y, CHUNK_HEIGHT_MIN, CHUNK_HEIGHT_MAX, 0, bb);
+  }
+  return [r|0, g|0, b|0];
+}
+
+// Render the entire chunk once into its offscreen image
+function renderChunkToImage(chunk){
+  const gfx = chunk.gfx;
+  if(!gfx) return;
+  gfx.loadPixels();
+  const w = gfx.width;
+  const h = gfx.height;
+  for(let zi=0; zi<h; zi++){
+    for(let xi=0; xi<w; xi++){
+      const block = chunk.blocks[xi][zi];
+      const rgb = computeBlockRGB(block);
+      const idx = 4 * ((zi * w) + xi);
+      gfx.pixels[idx + 0] = rgb[0];
+      gfx.pixels[idx + 1] = rgb[1];
+      gfx.pixels[idx + 2] = rgb[2];
+      gfx.pixels[idx + 3] = 255;
+    }
+  }
+  gfx.updatePixels();
 }
 
 function renderUI(){
@@ -821,6 +875,8 @@ function renderText(){
 function setDisplayMode(mode){
   if(mode === displayMode) return;
   displayMode = mode;
+  // Mark all generated chunks dirty so they re-render for the new mode
+  for(const ch of generatedChunks){ ch.dirty = true; }
 }
 
 function moveCam(dirX, dirZ){
@@ -994,6 +1050,8 @@ function paintBiome(screenX, screenY){
   for(const block of blocksInRadius){
     block.biome = Biome.DEEPOCEAN;
   }
+  // Refresh cached images on next frame
+  for(const ch of generatedChunks){ ch.dirty = true; }
 }
 
 function getBlocksInRadius(centerBlock, radius){
